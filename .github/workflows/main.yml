@@ -1,39 +1,45 @@
-name: RDP
+name: RDP Super Fast
+
 on:
   workflow_dispatch:
     inputs:
       instance:
-        description: 'رقم النسخة'
+        description: instance number
         required: true
         default: '1'
       persistent:
-        description: 'وضع الدوام'
+        description: persistent mode
         required: true
         default: 'true'
         type: boolean
+
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 360
+
     steps:
-    - name: تحميل الأدوات
+    - name: Download Tools
       shell: powershell
       run: |
         Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
         Expand-Archive ngrok.zip -DestinationPath .\ngrok\ -Force
-    - name: إعداد Ngrok
+
+    - name: Setup Ngrok
       shell: powershell
       env:
         NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
       run: .\ngrok\ngrok.exe authtoken $env:NGROK_TOKEN
-    - name: تفعيل RDP
+
+    - name: Enable RDP
       shell: powershell
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
         Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!2026" -Force)
         New-Item -ItemType Directory -Path "C:\Persist" -Force
-    - name: استعادة الملفات
+
+    - name: Restore Files
       shell: powershell
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,12 +56,11 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             git checkout $branch
             Copy-Item -Path "C:\repo\*" -Destination "C:\Persist\" -Recurse -Force 2>$null
-            Write-Host "✅ تم استعادة الملفات من الفرع $branch"
-          } else {
-            Write-Host "⚠️ لا يوجد فرع سابق، سيتم إنشاؤه لاحقاً"
+            Write-Host "Files restored from $branch"
           }
         }
-    - name: تشغيل Ngrok
+
+    - name: Start Ngrok
       shell: powershell
       run: |
         Start-Process -NoNewWindow -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389"
@@ -73,20 +78,16 @@ jobs:
           Start-Sleep -Seconds 2
         }
         $info = @"
-╔════════════════════════════════════╗
-║     RDP خارق - بدون AWS            ║
-╠════════════════════════════════════╣
-║  عنوان: $url
-║  مستخدم: runneradmin
-║  كلمة السر: P@ssw0rd!2026
-║  النسخة: ${{ github.event.inputs.instance }}
-║  التخزين: GitHub Branch
-╚════════════════════════════════════╝
+RDP Address: $url
+Username: runneradmin
+Password: P@ssw0rd!2026
+Instance: ${{ github.event.inputs.instance }}
 "@
         Write-Host $info -ForegroundColor Green
         $info | Out-File -FilePath "info.txt" -Encoding UTF8
         echo "url=$url" >> $env:GITHUB_OUTPUT
-    - name: حفظ الملفات في GitHub
+
+    - name: Save Files
       shell: powershell
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -108,18 +109,19 @@ jobs:
         }
         Copy-Item -Path "C:\Persist\*" -Destination "C:\repo\" -Recurse -Force
         git add .
-        git commit -m "تحديث من الجلسة $date" 2>$null
+        git commit -m "Update $date" 2>$null
         if ($LASTEXITCODE -eq 0) {
           git push origin $branch
-          Write-Host "✅ تم حفظ الملفات في فرع $branch"
         }
-    - name: رفع معلومات الاتصال
+
+    - name: Upload Info
       uses: actions/upload-artifact@v4
       with:
         name: rdp-info-${{ github.event.inputs.instance }}
         path: info.txt
         retention-days: 90
-    - name: إعادة التشغيل التلقائي
+
+    - name: Auto Restart
       if: ${{ github.event.inputs.persistent == 'true' }}
       shell: powershell
       env:
@@ -127,18 +129,17 @@ jobs:
         REPO: ${{ github.repository }}
         INSTANCE: ${{ github.event.inputs.instance }}
       run: |
-        $script = @'
-$token = "$env:TOKEN"
-$repo = "$env:REPO"
-$instance = "$env:INSTANCE"
-while ($true) {
+        $script = @"
+`$token = "$env:TOKEN"
+`$repo = "$env:REPO"
+`$instance = "$env:INSTANCE"
+while (`$true) {
   Start-Sleep -Seconds 21600
-  $body = @{ref = "main"; inputs = @{instance = $instance; persistent = "true"}} | ConvertTo-Json
-  $headers = @{Authorization = "Bearer $token"; Accept = "application/vnd.github.v3+json"}
-  Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/actions/workflows/rdp.yml/dispatches" -Method POST -Headers $headers -Body $body -ContentType "application/json"
-  Write-Host "تم إعادة التشغيل"
+  `$body = @{ref = "main"; inputs = @{instance = `$instance; persistent = "true"}} | ConvertTo-Json
+  `$headers = @{Authorization = "Bearer `$token"; Accept = "application/vnd.github.v3+json"}
+  Invoke-RestMethod -Uri "https://api.github.com/repos/`$repo/actions/workflows/rdp.yml/dispatches" -Method POST -Headers `$headers -Body `$body -ContentType "application/json"
 }
-'@
+"@
         $script | Out-File -FilePath "C:\restart.ps1" -Encoding UTF8
         Start-Process powershell -ArgumentList "-File C:\restart.ps1" -WindowStyle Hidden
         $elapsed = 0
@@ -148,5 +149,5 @@ while ($true) {
           $remaining = 21600 - $elapsed
           $hours = [math]::Floor($remaining / 3600)
           $minutes = [math]::Floor(($remaining % 3600) / 60)
-          Write-Host "الوقت المتبقي: $hours ساعة $minutes دقيقة"
+          Write-Host "Time left: $hours h $minutes m"
         }
